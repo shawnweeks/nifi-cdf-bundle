@@ -34,8 +34,10 @@ import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.io.StreamCallback;
+import uk.ac.bristol.star.cdf.AttributeEntry;
 import uk.ac.bristol.star.cdf.CdfContent;
 import uk.ac.bristol.star.cdf.CdfReader;
+import uk.ac.bristol.star.cdf.GlobalAttribute;
 import uk.ac.bristol.star.cdf.record.SimpleNioBuf;
 
 import java.io.IOException;
@@ -108,31 +110,37 @@ public class ConvertCDFToJSON extends AbstractProcessor {
                 CdfReader cdfReader = new CdfReader(new SimpleNioBuf(byteBuffer, true, false));
                 cdfContent = new CdfContent(cdfReader);
                 JsonWriter writer = new JsonWriter(new OutputStreamWriter(out, "UTF-8"));
-                writer.setIndent("    ");
+                writer.setIndent("  ");
 
                 writer.beginObject();
+                writer.name("leapSecondLastUpdated").value(cdfContent.getCdfInfo().getLeapSecondLastUpdated());
+                JsonWriter gAttsWriter = writer.name("cdfGAttributes");
+                GlobalAttribute[] gAtts = cdfContent.getGlobalAttributes();
+//                gAttsWriter.beginObject();
+                gAttsWriter.beginArray();
 
-                JsonWriter gAtts = writer.name("cdfGAttributes");
-                gAtts.beginObject();
-                JsonWriter gAtt = gAtts.name("Project");
-                gAtt.beginArray();
-                gAtt.beginObject();
-                gAtt.name("entryNum").value(0);
-                gAtt.name("entryType").value("CDF_CHAR");
-                gAtt.name("entryValue").value("STSP Cluster&gt;Solar Terrestrial Science Programme, Cluster");
-                gAtt.endObject();
-                gAtt.beginObject();
-                gAtt.name("entryNum").value(1);
-                gAtt.name("entryType").value("CDF_CHAR");
-                gAtt.name("entryValue").value("STSP Cluster&gt;Solar Terrestrial Science Programme, Cluster");
-                gAtt.endObject();
-                gAtt.beginObject();
-                gAtt.name("entryNum").value(2);
-                gAtt.name("entryType").value("CDF_CHAR");
-                gAtt.name("entryValue").value("STSP Cluster&gt;Solar Terrestrial Science Programme, Cluster");
-                gAtt.endObject();
-                gAtt.endArray();
-                gAtts.endObject();
+                for (GlobalAttribute gAtt : gAtts) {
+                    gAttsWriter.beginObject();
+
+                    gAttsWriter.name("name").value(gAtt.getName());
+                    JsonWriter gAttWriter = gAttsWriter.name("entries");
+                    gAttWriter.beginArray();
+                    for (int i = 0; i < gAtt.getEntries().length; i++) {
+                        AttributeEntry entry = gAtt.getEntries()[i];
+                        if (entry != null) {
+                            gAttsWriter.beginObject();
+                            gAttWriter.name("entryNum").value(i);
+                            gAttWriter.name("entryType").value(entry.getDataType().getName());
+                            gAttWriter.name("entryValue").value(entry.toString());
+                            gAttsWriter.endObject();
+                        }
+                    }
+                    gAttWriter.endArray();
+
+                    gAttsWriter.endObject();
+                }
+                gAttsWriter.endArray();
+//                gAttsWriter.endObject();
 
                 writer.endObject();
 

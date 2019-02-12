@@ -24,7 +24,6 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.nio.file.Paths;
-import java.util.Arrays;
 
 
 public class TestConvertCDFToJSON {
@@ -39,7 +38,7 @@ public class TestConvertCDFToJSON {
 
     @Test
     public void testProcessor() throws IOException {
-        testRunner.enqueue(Paths.get("src/test/resources/bigcdf_compressed.cdf"));
+        testRunner.enqueue(Paths.get("src/test/resources/cl_sp_edi_00000000_v01.cdf"));
         testRunner.run();
 
         final MockFlowFile out = testRunner.getFlowFilesForRelationship(ConvertCDFToJSON.REL_SUCCESS).get(0);
