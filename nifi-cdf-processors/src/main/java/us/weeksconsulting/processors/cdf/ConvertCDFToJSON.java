@@ -38,6 +38,7 @@ import uk.ac.bristol.star.cdf.AttributeEntry;
 import uk.ac.bristol.star.cdf.CdfContent;
 import uk.ac.bristol.star.cdf.CdfReader;
 import uk.ac.bristol.star.cdf.GlobalAttribute;
+import uk.ac.bristol.star.cdf.Variable;
 import uk.ac.bristol.star.cdf.record.SimpleNioBuf;
 
 import java.io.IOException;
@@ -46,6 +47,7 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -113,34 +115,70 @@ public class ConvertCDFToJSON extends AbstractProcessor {
                 writer.setIndent("  ");
 
                 writer.beginObject();
-                writer.name("leapSecondLastUpdated").value(cdfContent.getCdfInfo().getLeapSecondLastUpdated());
-                JsonWriter gAttsWriter = writer.name("cdfGAttributes");
-                GlobalAttribute[] gAtts = cdfContent.getGlobalAttributes();
-//                gAttsWriter.beginObject();
-                gAttsWriter.beginArray();
 
-                for (GlobalAttribute gAtt : gAtts) {
-                    gAttsWriter.beginObject();
+//                JsonWriter gAttsWriter = writer.name("cdfGAttributes");
+//                GlobalAttribute[] gAtts = cdfContent.getGlobalAttributes();
+//                gAttsWriter.beginArray();
+//                for (GlobalAttribute gAtt : gAtts) {
+//                    gAttsWriter.beginObject();
+//
+//                    gAttsWriter.name("name").value(gAtt.getName());
+//                    JsonWriter gAttWriter = gAttsWriter.name("entries");
+//                    gAttWriter.beginArray();
+//                    for (int i = 0; i < gAtt.getEntries().length; i++) {
+//                        AttributeEntry entry = gAtt.getEntries()[i];
+//                        if (entry != null) {
+//                            gAttsWriter.beginObject();
+//                            gAttWriter.name("entryNum").value(i);
+//                            gAttWriter.name("entryType").value(entry.getDataType().getName());
+//                            gAttWriter.name("entryValue").value(entry.toString());
+//                            gAttsWriter.endObject();
+//                        }
+//                    }
+//                    gAttWriter.endArray();
+//
+//                    gAttsWriter.endObject();
+//                }
+//                gAttsWriter.endArray();
 
-                    gAttsWriter.name("name").value(gAtt.getName());
-                    JsonWriter gAttWriter = gAttsWriter.name("entries");
-                    gAttWriter.beginArray();
-                    for (int i = 0; i < gAtt.getEntries().length; i++) {
-                        AttributeEntry entry = gAtt.getEntries()[i];
-                        if (entry != null) {
-                            gAttsWriter.beginObject();
-                            gAttWriter.name("entryNum").value(i);
-                            gAttWriter.name("entryType").value(entry.getDataType().getName());
-                            gAttWriter.name("entryValue").value(entry.toString());
-                            gAttsWriter.endObject();
+                JsonWriter varsWriter = writer.name("cdfVariables");
+                Variable[] vars = cdfContent.getVariables();
+                varsWriter.beginArray();
+                for (Variable var : vars) {
+                    varsWriter.beginObject();
+                    varsWriter.name("pos").value(var.getNum());
+                    varsWriter.name("name").value(var.getName());
+                    varsWriter.name("type").value(var.getDataType().getName());
+                    JsonWriter recWriter = varsWriter.name("records");
+                    recWriter.beginArray();
+
+                    Object tmpRecArray = var.createRawValueArray();
+                    for (int i = 0; i < var.getRecordCount(); i++) {
+                        Object shapedRec = var.readShapedRecord(i, true, tmpRecArray);
+                        recWriter.beginObject();
+                        recWriter.name("recNum").value(i);
+                        JsonWriter recValueWriter = recWriter.name("recValue");
+                        recValueWriter.beginArray();
+                        if (shapedRec instanceof String[]) {
+                            String[] recArray = (String[]) shapedRec;
+                            for (String v : recArray) {
+                                recValueWriter.value(v);
+                            }
+                        } else if (shapedRec instanceof double[]) {
+                            double[] recArray = (double[]) shapedRec;
+//                            recValueWriter.value(Arrays.toString(recArray));
+                            for (double v : recArray) {
+                                recValueWriter.value(v);
+                            }
                         }
+                        recValueWriter.endArray();
+                        recWriter.endObject();
                     }
-                    gAttWriter.endArray();
 
-                    gAttsWriter.endObject();
+                    recWriter.endArray();
+                    varsWriter.endObject();
                 }
-                gAttsWriter.endArray();
-//                gAttsWriter.endObject();
+                varsWriter.endArray();
 
                 writer.endObject();
 

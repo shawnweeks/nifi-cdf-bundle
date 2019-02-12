@@ -16,14 +16,20 @@
  */
 package us.weeksconsulting.processors.cdf;
 
+import org.apache.commons.io.IOUtils;
+import org.apache.nifi.controller.repository.claim.ContentClaim;
+import org.apache.nifi.controller.repository.claim.ResourceClaim;
 import org.apache.nifi.util.MockFlowFile;
 import org.apache.nifi.util.TestRunner;
 import org.apache.nifi.util.TestRunners;
 import org.junit.Before;
 import org.junit.Test;
 
+import javax.annotation.Resource;
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.file.Paths;
+import java.util.List;
 
 
 public class TestConvertCDFToJSON {
@@ -38,11 +44,18 @@ public class TestConvertCDFToJSON {
 
     @Test
     public void testProcessor() throws IOException {
+//        testRunner.enqueue(Paths.get("src/test/resources/bigcdf_compressed.cdf"));
         testRunner.enqueue(Paths.get("src/test/resources/cl_sp_edi_00000000_v01.cdf"));
         testRunner.run();
 
         final MockFlowFile out = testRunner.getFlowFilesForRelationship(ConvertCDFToJSON.REL_SUCCESS).get(0);
-        System.out.println(new String(out.toByteArray()));
+        byte [] ba = out.toByteArray();
+        System.out.println(ba.length);
+        String output = new String(ba,"UTF-8");
+        List<String> lines = IOUtils.readLines(new StringReader(output));
+        for(String line: lines){
+            System.out.println(line);
+        }
     }
 
 }
