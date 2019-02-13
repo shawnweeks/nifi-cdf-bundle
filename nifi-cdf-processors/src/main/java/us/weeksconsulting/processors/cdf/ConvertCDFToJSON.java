@@ -45,6 +45,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.lang.reflect.Array;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -53,21 +54,18 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-@Tags({"example"})
+@Tags({ "example" })
 @CapabilityDescription("Provide a description")
 @SeeAlso({})
-@ReadsAttributes({@ReadsAttribute(attribute = "", description = "")})
-@WritesAttributes({@WritesAttribute(attribute = "", description = "")})
+@ReadsAttributes({ @ReadsAttribute(attribute = "", description = "") })
+@WritesAttributes({ @WritesAttribute(attribute = "", description = "") })
 public class ConvertCDFToJSON extends AbstractProcessor {
 
-    static final Relationship REL_SUCCESS = new Relationship.Builder()
-            .name("success")
-            .description("A FlowFile is routed to this relationship after it has been converted to JSON")
-            .build();
+    static final Relationship REL_SUCCESS = new Relationship.Builder().name("success")
+            .description("A FlowFile is routed to this relationship after it has been converted to JSON").build();
 
-    static final Relationship REL_FAILURE = new Relationship.Builder()
-            .name("failure")
-            .description("A FlowFile is routed to this relationship if it cannot be parsed as CDF or cannot be converted to JSON for any reason")
+    static final Relationship REL_FAILURE = new Relationship.Builder().name("failure").description(
+            "A FlowFile is routed to this relationship if it cannot be parsed as CDF or cannot be converted to JSON for any reason")
             .build();
 
     private List<PropertyDescriptor> descriptors;
@@ -116,32 +114,32 @@ public class ConvertCDFToJSON extends AbstractProcessor {
 
                 writer.beginObject();
 
-//                JsonWriter gAttsWriter = writer.name("cdfGAttributes");
-//                GlobalAttribute[] gAtts = cdfContent.getGlobalAttributes();
-//                gAttsWriter.beginArray();
-//                for (GlobalAttribute gAtt : gAtts) {
-//                    gAttsWriter.beginObject();
-//
-//                    gAttsWriter.name("name").value(gAtt.getName());
-//                    JsonWriter gAttWriter = gAttsWriter.name("entries");
-//                    gAttWriter.beginArray();
-//                    for (int i = 0; i < gAtt.getEntries().length; i++) {
-//                        AttributeEntry entry = gAtt.getEntries()[i];
-//                        if (entry != null) {
-//                            gAttsWriter.beginObject();
-//                            gAttWriter.name("entryNum").value(i);
-//                            gAttWriter.name("entryType").value(entry.getDataType().getName());
-//                            gAttWriter.name("entryValue").value(entry.toString());
-//                            gAttsWriter.endObject();
-//                        }
-//                    }
-//                    gAttWriter.endArray();
-//
-//                    gAttsWriter.endObject();
-//                }
-//                gAttsWriter.endArray();
+                JsonWriter gAttsWriter = writer.name("globalAttributes");
+                GlobalAttribute[] gAtts = cdfContent.getGlobalAttributes();
+                gAttsWriter.beginArray();
+                for (GlobalAttribute gAtt : gAtts) {
+                    gAttsWriter.beginObject();
 
-                JsonWriter varsWriter = writer.name("cdfVariables");
+                    gAttsWriter.name("name").value(gAtt.getName());
+                    JsonWriter gAttWriter = gAttsWriter.name("entries");
+                    gAttWriter.beginArray();
+                    for (int i = 0; i < gAtt.getEntries().length; i++) {
+                        AttributeEntry entry = gAtt.getEntries()[i];
+                        if (entry != null) {
+                            gAttsWriter.beginObject();
+                            gAttWriter.name("entryNum").value(i);
+                            gAttWriter.name("entryType").value(entry.getDataType().getName());
+                            gAttWriter.name("entryValue").value(entry.toString());
+                            gAttsWriter.endObject();
+                        }
+                    }
+                    gAttWriter.endArray();
+
+                    gAttsWriter.endObject();
+                }
+                gAttsWriter.endArray();
+
+                JsonWriter varsWriter = writer.name("variables");
                 Variable[] vars = cdfContent.getVariables();
                 varsWriter.beginArray();
                 for (Variable var : vars) {
@@ -159,17 +157,12 @@ public class ConvertCDFToJSON extends AbstractProcessor {
                         recWriter.name("recNum").value(i);
                         JsonWriter recValueWriter = recWriter.name("recValue");
                         recValueWriter.beginArray();
-                        if (shapedRec instanceof String[]) {
-                            String[] recArray = (String[]) shapedRec;
-                            for (String v : recArray) {
-                                recValueWriter.value(v);
+                        if (shapedRec.getClass().isArray()) {
+                            for (int x = 0; x < Array.getLength(shapedRec); x++) {
+                                recValueWriter.value(Array.get(shapedRec, x).toString());
                             }
-                        } else if (shapedRec instanceof double[]) {
-                            double[] recArray = (double[]) shapedRec;
-//                            recValueWriter.value(Arrays.toString(recArray));
-                            for (double v : recArray) {
-                                recValueWriter.value(v);
-                            }
+                        } else {
+                            recValueWriter.value(shapedRec.toString());
                         }
                         recValueWriter.endArray();
                         recWriter.endObject();
