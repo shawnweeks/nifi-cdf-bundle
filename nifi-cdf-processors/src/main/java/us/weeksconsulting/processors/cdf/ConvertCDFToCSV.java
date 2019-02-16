@@ -17,6 +17,8 @@
 package us.weeksconsulting.processors.cdf;
 
 import com.google.gson.stream.JsonWriter;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.io.IOUtils;
 import org.apache.nifi.annotation.behavior.ReadsAttribute;
 import org.apache.nifi.annotation.behavior.ReadsAttributes;
@@ -33,9 +35,12 @@ import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
+import org.apache.nifi.processor.io.InputStreamCallback;
 import org.apache.nifi.processor.io.StreamCallback;
+import org.w3c.dom.Attr;
 import uk.ac.bristol.star.cdf.AttributeEntry;
 import uk.ac.bristol.star.cdf.CdfContent;
+import uk.ac.bristol.star.cdf.CdfInfo;
 import uk.ac.bristol.star.cdf.CdfReader;
 import uk.ac.bristol.star.cdf.GlobalAttribute;
 import uk.ac.bristol.star.cdf.Variable;
@@ -55,19 +60,27 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-@Tags({ "example" })
+@Tags({"example"})
 @CapabilityDescription("Provide a description")
 @SeeAlso({})
-@ReadsAttributes({ @ReadsAttribute(attribute = "", description = "") })
-@WritesAttributes({ @WritesAttribute(attribute = "", description = "") })
+@ReadsAttributes({@ReadsAttribute(attribute = "", description = "")})
+@WritesAttributes({@WritesAttribute(attribute = "", description = "")})
 public class ConvertCDFToCSV extends AbstractProcessor {
 
-    static final Relationship REL_SUCCESS = new Relationship.Builder().name("success")
-            .description("A FlowFile is routed to this relationship after it has been converted to JSON").build();
+    static final Relationship REL_FAILURE = new Relationship.Builder().name("failure")
+            .description("A FlowFile is routed to this relationship if it cannot be parsed as CDF").build();
 
-    static final Relationship REL_FAILURE = new Relationship.Builder().name("failure").description(
-            "A FlowFile is routed to this relationship if it cannot be parsed as CDF or cannot be converted to JSON for any reason")
-            .build();
+    static final Relationship REL_ORIGINAL = new Relationship.Builder().name("original")
+            .description("The original FlowFile is routed to this relationship after it has been converted to CSV").build();
+
+    static final Relationship REL_GLOBAL = new Relationship.Builder().name("global")
+            .description("The original FlowFile is routed to this relationship after it has been converted to CSV").build();
+
+    static final Relationship REL_VAR_INFO = new Relationship.Builder().name("var_info")
+            .description("The original FlowFile is routed to this relationship after it has been converted to CSV").build();
+
+    static final Relationship REL_VAR_RECS = new Relationship.Builder().name("var_records")
+            .description("The original FlowFile is routed to this relationship after it has been converted to CSV").build();
 
     private List<PropertyDescriptor> descriptors;
 
@@ -77,10 +90,12 @@ public class ConvertCDFToCSV extends AbstractProcessor {
     protected void init(final ProcessorInitializationContext context) {
         final List<PropertyDescriptor> descriptors = new ArrayList<PropertyDescriptor>();
         this.descriptors = Collections.unmodifiableList(descriptors);
-
         final Set<Relationship> relationships = new HashSet<Relationship>();
-        relationships.add(REL_SUCCESS);
         relationships.add(REL_FAILURE);
+        relationships.add(REL_ORIGINAL);
+        relationships.add(REL_GLOBAL);
+        relationships.add(REL_VAR_INFO);
+        relationships.add(REL_VAR_RECS);
         this.relationships = Collections.unmodifiableSet(relationships);
     }
 
@@ -101,102 +116,119 @@ public class ConvertCDFToCSV extends AbstractProcessor {
             return;
         }
         try {
-            flowFile = session.write(flowFile, new StreamCallback() {
-                @Override
-                public void process(InputStream in, OutputStream out) throws IOException {
+            session.read(flowFile, in -> {
+                String uuid = flowFile.getAttribute("uuid");
+                String filename = flowFile.getAttribute("filename");
+
+                FlowFile cdfFlowFile = session.create(flowFile);
+                FlowFile cdfVarInfoFlowFile = session.create(flowFile);
+                FlowFile cdfVarRecFlowFile = session.create(flowFile);
+                try {
                     // Setup CDF Reader
-                    CdfContent cdfContent;
-                    byte[] bytes = IOUtils.toByteArray(in);
+                    ByteBuffer byteBuffer = ByteBuffer.wrap(IOUtils.toByteArray(in));
                     in.close();
-                    ByteBuffer byteBuffer = ByteBuffer.wrap(bytes);
-                    CdfReader cdfReader = new CdfReader(new SimpleNioBuf(byteBuffer, true, false));
-                    cdfContent = new CdfContent(cdfReader);
-                    JsonWriter writer = new JsonWriter(new OutputStreamWriter(out, "UTF-8"));
-                    writer.setIndent("  ");
+                    CdfContent cdfContent = new CdfContent(new CdfReader(new SimpleNioBuf(byteBuffer, true, false)));
 
-                    writer.beginObject();
+//                    cdfFlowFile = session.write(cdfFlowFile, out -> {
+//                        try (CSVPrinter printer = new CSVPrinter(new OutputStreamWriter(out), CSVFormat.newFormat('\1').withRecordSeparator('\n'))) {
+//                            printer.printRecord("id", "filename", "global_attributes");
+//                            CdfInfo cdfInfo = cdfContent.getCdfInfo();
+//                            printer.print(flowFile.getAttribute("filename"));
+//                            StringBuilder sb = new StringBuilder();
+//
+//                            GlobalAttribute[] gAtts = cdfContent.getGlobalAttributes();
+//                            for (int x = 0; x < gAtts.length; x++) {
+//                                if (x > 0) sb.append('\2');
+//                                GlobalAttribute gAtt = gAtts[x];
+//                                sb.append(gAtt.getName()).append('\3');
+//                                AttributeEntry[] attEnts = gAtt.getEntries();
+//                                for (int i = 0; i < attEnts.length; i++) {
+//                                    AttributeEntry attEnt = attEnts[i];
+//                                    if (attEnt != null) {
+//                                        if (i > 0) sb.append('\4');
+//                                        sb.append(i).append('\5');
+//                                        sb.append(attEnt.getDataType().getName()).append('\5');
+//                                        sb.append(attEnt.toString());
+//                                    }
+//                                }
+//                            }
+//                            printer.print(sb.toString());
+//                        }
+//                    });
 
-                    JsonWriter gAttsWriter = writer.name("globalAttributes");
-                    GlobalAttribute[] gAtts = cdfContent.getGlobalAttributes();
-                    gAttsWriter.beginArray();
-                    for (GlobalAttribute gAtt : gAtts) {
-                        gAttsWriter.beginObject();
+//                    cdfVarInfoFlowFile = session.write(cdfVarInfoFlowFile, out -> {
+//                        try (CSVPrinter printer = new CSVPrinter(new OutputStreamWriter(out), CSVFormat.newFormat('\1').withRecordSeparator('\n'))) {
+////                            printer.printRecord("id", "variable_name", "type", "attributes");
+//
+//                            Variable[] vars = cdfContent.getVariables();
+//                            VariableAttribute[] varAtts = cdfContent.getVariableAttributes();
+//                            StringBuilder sb = new StringBuilder();
+//                            int v = 0;
+//                            for (Variable var : vars) {
+//                                if (v++ > 0) printer.println();
+//                                printer.print(uuid);
+//                                printer.print(filename);
+//                                printer.print(var.getDataType().getName());
+//                                for (VariableAttribute varAtt : varAtts) {
+//                                    AttributeEntry attEnt = varAtt.getEntry(var);
+//                                    if (attEnt != null) {
+//                                        sb.append(attEnt.getDataType().getName()).append('\5');
+//                                        sb.append(attEnt.toString());
+//                                    }
+//                                }
+//                            }
+//                        }
+//                    });
+                    String varId = cdfVarInfoFlowFile.getAttribute("uuid");
+                    cdfVarRecFlowFile = session.write(cdfVarRecFlowFile, out -> {
+                        try (CSVPrinter printer = new CSVPrinter(new OutputStreamWriter(out), CSVFormat.newFormat(',').withRecordSeparator('\n'))) {
+                            printer.printRecord("file_id","variable_name", "record_number", "element_number", "element_value");
 
-                        gAttsWriter.name("name").value(gAtt.getName());
-                        JsonWriter gAttWriter = gAttsWriter.name("entries");
-                        gAttWriter.beginArray();
-                        for (int i = 0; i < gAtt.getEntries().length; i++) {
-                            AttributeEntry entry = gAtt.getEntries()[i];
-                            if (entry != null) {
-                                gAttsWriter.beginObject();
-                                gAttWriter.name("entryNum").value(i);
-                                gAttWriter.name("entryType").value(entry.getDataType().getName());
-                                gAttWriter.name("entryValue").value(entry.toString());
-                                gAttsWriter.endObject();
-                            }
-                        }
-                        gAttWriter.endArray();
+                            Variable[] vars = cdfContent.getVariables();
+                            boolean firstRow = true;
+                            for (Variable var : vars) {
+                                for (int i = 0; i < var.getRecordCount(); i++) {
+                                    Object tmpArray = var.createRawValueArray();
+                                    Object record = var.readShapedRecord(i, true, tmpArray);
 
-                        gAttsWriter.endObject();
-                    }
-                    gAttsWriter.endArray();
-
-                    JsonWriter varsWriter = writer.name("variables");
-                    Variable[] vars = cdfContent.getVariables();
-                    VariableAttribute[] varAtts = cdfContent.getVariableAttributes();
-                    varsWriter.beginArray();
-                    for (Variable var : vars) {
-                        varsWriter.beginObject();
-                        varsWriter.name("pos").value(var.getNum());
-                        varsWriter.name("name").value(var.getName());
-                        varsWriter.name("type").value(var.getDataType().getName());
-                        JsonWriter attWriter = varsWriter.name("attributes");
-                        attWriter.beginArray();
-                        for (VariableAttribute varAtt : varAtts) {
-                            AttributeEntry ent = varAtt.getEntry(var);
-                            if (ent != null) {
-                                attWriter.beginObject();
-                                attWriter.name("name").value(varAtt.getName());
-                                attWriter.name("value").value(ent.toString());
-                                attWriter.endObject();
-                            }
-                        }
-                        attWriter.endArray();
-                        JsonWriter recWriter = varsWriter.name("records");
-                        recWriter.beginArray();
-                        Object tmpRecArray = var.createRawValueArray();
-                        for (int i = 0; i < var.getRecordCount(); i++) {
-                            Object shapedRec = var.readShapedRecord(i, true, tmpRecArray);
-                            recWriter.beginObject();
-                            recWriter.name("recNum").value(i);
-                            JsonWriter recValueWriter = recWriter.name("recValue");
-                            recValueWriter.beginArray();
-                            if (shapedRec.getClass().isArray()) {
-                                for (int x = 0; x < Array.getLength(shapedRec); x++) {
-                                    recValueWriter.value(Array.get(shapedRec, x).toString());
+                                    if (record.getClass().isArray()) {
+                                        for (int v = 0; v < Array.getLength(record); v++) {
+                                            if (!firstRow) printer.println();
+                                            printer.print(uuid);
+                                            printer.print(var.getName());
+                                            printer.print(i);
+                                            printer.print(v);
+                                            printer.print(Array.get(record, v));
+                                            firstRow = false;
+                                        }
+                                    } else {
+                                        if (!firstRow) printer.println();
+                                        printer.print(uuid);
+                                        printer.print(var.getName());
+                                        printer.print(i);
+                                        printer.print(0);
+                                        printer.print(record);
+                                        firstRow = false;
+                                    }
                                 }
-                            } else {
-                                recValueWriter.value(shapedRec.toString());
                             }
-                            recValueWriter.endArray();
-                            recWriter.endObject();
                         }
-
-                        recWriter.endArray();
-                        varsWriter.endObject();
-                    }
-                    varsWriter.endArray();
-
-                    writer.endObject();
-
-                    writer.close();
-                    out.close();
+                    });
+                    session.transfer(cdfFlowFile, REL_GLOBAL);
+                    session.transfer(cdfVarInfoFlowFile, REL_VAR_INFO);
+                    session.transfer(cdfVarRecFlowFile, REL_VAR_RECS);
+                } catch (Exception e) {
+                    session.remove(cdfFlowFile);
+                    session.remove(cdfVarInfoFlowFile);
+                    session.remove(cdfVarRecFlowFile);
+                    throw e;
                 }
             });
+            session.transfer(flowFile, REL_ORIGINAL);
         } catch (Exception e) {
-            getLogger().error("Failed to Convert CDF to JSON", e);
+            getLogger().error("Failed to Convert CDF to CSV", e);
             session.transfer(flowFile, REL_FAILURE);
         }
-        session.transfer(flowFile, REL_SUCCESS);
+
     }
 }
