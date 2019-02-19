@@ -16,17 +16,21 @@ import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
+import uk.ac.bristol.star.cdf.AttributeEntry;
 import uk.ac.bristol.star.cdf.CdfContent;
 import uk.ac.bristol.star.cdf.CdfReader;
 import uk.ac.bristol.star.cdf.Variable;
+import uk.ac.bristol.star.cdf.VariableAttribute;
 import uk.ac.bristol.star.cdf.record.SimpleNioBuf;
 
 import java.lang.reflect.Array;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class ConvertCDFToAVRO extends AbstractProcessor {
@@ -43,6 +47,9 @@ public class ConvertCDFToAVRO extends AbstractProcessor {
 
     private Set<Relationship> relationships;
 
+
+    private Schema cdfVarSchema;
+    private Schema cdfVarAttSchema;
     private Schema cdfVarRecSchema;
 
     @Override
@@ -58,16 +65,40 @@ public class ConvertCDFToAVRO extends AbstractProcessor {
 
         final List<String> nullStringList = new ArrayList<>();
 
+        cdfVarAttSchema = SchemaBuilder
+                .record("cdfVarAtt")
+                .fields()
+                .name("attribute_type").type().stringType().noDefault()
+                .name("attribute_value").type().stringType().noDefault()
+                .endRecord();
+
+        cdfVarSchema = SchemaBuilder
+                .record("cdfVar")
+//                .namespace("org.apache.hive")
+                .fields()
+                .name("file_id").type().stringType().noDefault()
+                .name("variable_name").type().stringType().noDefault()
+                .name("variable_type").type().stringType().noDefault()
+//                .name("num_elements").type().intType().noDefault()
+//                .name("dim").type().intType().noDefault()
+//                .name("dim_sizes").type().array().items().intType().noDefault()
+//                .name("dim_variances").type().array().items().booleanType().noDefault()
+//                .name("rec_variance").type().intType().noDefault()
+//                .name("max_records").type().intType().noDefault()
+                .name("attributes").type().map().values(cdfVarAttSchema).noDefault()
+                .endRecord();
+
+
         cdfVarRecSchema = SchemaBuilder
                 .record("cdfVarRec")
-                .namespace("org.apache.hive")
+//                .namespace("org.apache.hive")
                 .fields()
                 .name("file_id").type().stringType().noDefault()
                 .name("variable_name").type().stringType().noDefault()
                 .name("variable_type").type().stringType().noDefault()
                 .name("record_number").type().intType().noDefault()
-                .name("record_size").type().intType().noDefault()
-                .name("record_array").type().array().items().stringType().arrayDefault(nullStringList)
+                .name("record_count").type().intType().noDefault()
+                .name("record_array").type().array().items().stringType().noDefault()
                 .endRecord();
 
     }
@@ -91,6 +122,10 @@ public class ConvertCDFToAVRO extends AbstractProcessor {
 
         session.read(flowFile, in -> {
             FlowFile cdfRecFlowFile = session.create(flowFile);
+            FlowFile cdfVarFlowFile = session.create(flowFile);
+
+            session.putAttribute(cdfVarFlowFile, "cdf_extract_type", "cdfVarFlowFile");
+            session.putAttribute(cdfRecFlowFile, "cdf_extract_type", "cdfRecFlowFile");
 
             // Setup CDF Reader
             ByteBuffer byteBuffer = ByteBuffer.wrap(IOUtils.toByteArray(in));
@@ -98,9 +133,40 @@ public class ConvertCDFToAVRO extends AbstractProcessor {
             CdfContent cdfContent = new CdfContent(new CdfReader(new SimpleNioBuf(byteBuffer, true, false)));
 
 
-            DataFileWriter<Record> writer = new DataFileWriter<>(new GenericDatumWriter(cdfVarRecSchema));
+            DataFileWriter<Record> writer = new DataFileWriter<>(new GenericDatumWriter());
+            writer.setCodec(CodecFactory.deflateCodec(9));
+
+            cdfVarFlowFile = session.write(cdfVarFlowFile, out -> {
+                DataFileWriter<Record> w = writer.create(cdfVarSchema, out);
+
+                Variable[] vars = cdfContent.getVariables();
+                VariableAttribute[] varAtts = cdfContent.getVariableAttributes();
+
+                Record r = new GenericData.Record(cdfVarSchema);
+
+                for (Variable var : vars) {
+
+                    r.put("file_id", flowFile.getAttribute("uuid"));
+                    r.put("variable_name", var.getName());
+                    r.put("variable_type", var.getDataType().getName());
+
+                    Map<String, Record> attMap = new HashMap<>();
+                    for (VariableAttribute varAtt : varAtts) {
+                        AttributeEntry attEnt = varAtt.getEntry(var);
+                        if (attEnt != null) {
+                            Record x = new GenericData.Record(cdfVarAttSchema);
+                            x.put("attribute_type", attEnt.getDataType().getName());
+                            x.put("attribute_value", attEnt.toString());
+                            attMap.put(varAtt.getName(), x);
+                        }
+                    }
+                    r.put("attributes", attMap);
+                    w.append(r);
+                }
+                w.close();
+            });
+
             cdfRecFlowFile = session.write(cdfRecFlowFile, out -> {
-                writer.setCodec(CodecFactory.deflateCodec(9));
                 DataFileWriter<Record> w = writer.create(cdfVarRecSchema, out);
 
                 Variable[] vars = cdfContent.getVariables();
@@ -118,12 +184,12 @@ public class ConvertCDFToAVRO extends AbstractProcessor {
                         List<String> recordArray = new ArrayList<>();
                         if (record.getClass().isArray()) {
                             int arraySize = Array.getLength(record);
-                            r.put("record_size", arraySize);
+                            r.put("record_count", arraySize);
                             for (int v = 0; v < arraySize; v++) {
                                 recordArray.add(Array.get(record, v).toString());
                             }
                         } else {
-                            r.put("record_size", 1);
+                            r.put("record_count", 1);
                             recordArray.add(record.toString());
                         }
                         r.put("record_array", recordArray);
@@ -134,7 +200,9 @@ public class ConvertCDFToAVRO extends AbstractProcessor {
             });
             writer.close();
 
-            session.transfer(cdfRecFlowFile, REL_SUCCESS);
+            session.transfer(cdfVarFlowFile, REL_SUCCESS);
+//            session.transfer(cdfRecFlowFile, REL_SUCCESS);
+            session.remove(cdfRecFlowFile);
         });
 
         session.transfer(flowFile, REL_ORIGINAL);
